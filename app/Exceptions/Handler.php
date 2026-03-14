@@ -13,5 +13,6 @@ class Handler extends ExceptionHandler
         'password_confirmation',
     ];
 
+    // Register application-specific exception handling callbacks here.
     public function register(): void {}
 }

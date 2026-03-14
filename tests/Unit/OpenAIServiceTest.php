@@ -49,7 +49,7 @@ class OpenAIServiceTest extends TestCase
         $this->assertIsArray($result['properties']);
     }
 
-    public function test_parse_intent_returns_default_structure_on_invalid_json(): void
+    public function test_parse_intent_throws_on_invalid_json(): void
     {
         $mockResponse = [
             'choices' => [
