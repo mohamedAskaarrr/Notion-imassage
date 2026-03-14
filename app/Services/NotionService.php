@@ -90,7 +90,7 @@ class NotionService
     public function updatePage(string $pageId, array $properties): array
     {
         if (empty($pageId)) {
-            throw new \InvalidArgumentException('Page ID is required.');
+            throw new \InvalidArgumentException('Page ID is required for update operation');
         }
 
         $pageProperties = [];
