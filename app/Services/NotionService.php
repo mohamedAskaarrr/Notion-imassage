@@ -54,16 +54,22 @@ class NotionService
     }
 
     /**
-     * Create a new task in Notion
+     * Create a new task in Notion.
      *
-     * @param array $command Command containing title and optional due date
+     * @param array|string $command Task command array or plain task title
+     * @param string|null $due Optional due date when passing a plain title
      * @return array Result with message
      */
-    private function createTask(array $command): array
+    public function createTask(array|string $command, ?string $due = null): array
     {
-        $title = $command['title'] ?? null;
-        $due = $command['due'] ?? null;
+        if (is_string($command)) {
+            $command = [
+                'title' => $command,
+                'due' => $due,
+            ];
+        }
 
+        $title = $command['title'] ?? null;
         if (!$title) {
             return [
                 'message' => 'Task title is required',
@@ -79,13 +85,19 @@ class NotionService
                 throw new Exception('Notion credentials not configured');
             }
 
-            // Prepare the request payload for creating a page in Notion
+            $dbProperties = $this->getDatabaseProperties($databaseId, $token);
+            $titleProperty = $this->resolvePropertyName($dbProperties, 'title', ['Name', 'Task name', 'Title']);
+
+            if (!$titleProperty) {
+                throw new Exception('No title property found in tasks database');
+            }
+
             $payload = [
                 'parent' => [
                     'database_id' => $databaseId
                 ],
                 'properties' => [
-                    'Name' => [
+                    $titleProperty => [
                         'title' => [
                             [
                                 'text' => [
@@ -93,26 +105,10 @@ class NotionService
                                 ]
                             ]
                         ]
-                    ],
-                    'Status' => [
-                        'status' => [
-                            'name' => 'Not started'
-                        ]
                     ]
                 ]
             ];
 
-            // Add due date if provided
-            if ($due) {
-                $payload['properties']['Due Date'] = [
-                    'date' => [
-                        'start' => $this->normalizeDateString($due),
-                        'time_zone' => 'UTC'
-                    ]
-                ];
-            }
-
-            // Make request to Notion API
             $response = Http::withHeaders([
                 'Authorization' => "Bearer {$token}",
                 'Notion-Version' => self::NOTION_VERSION,
@@ -122,13 +118,15 @@ class NotionService
             if (!$response->successful()) {
                 Log::error('Notion API Error creating task', [
                     'status' => $response->status(),
-                    'response' => $response->json()
+                    'response' => $response->json(),
+                    'body' => $response->body(),
+                    'payload' => $payload,
                 ]);
                 throw new Exception('Failed to create task in Notion');
             }
 
             return [
-                'message' => "Task '{$title}' created successfully!" . ($due ? " Due: {$due}" : ""),
+                'message' => "Task '{$title}' created successfully!",
                 'success' => true,
                 'data' => [
                     'task_id' => $response->json()['id'] ?? null
@@ -149,12 +147,12 @@ class NotionService
     }
 
     /**
-     * List all tasks from Notion database
+     * List all tasks from Notion database.
      *
-     * @param array $command Command (no parameters needed)
-     * @return array Result with message and tasks data
+     * @param array $command Optional list command params
+     * @return array Result with tasks data
      */
-    private function listTasks(array $command): array
+    public function listTasks(array $command = []): array
     {
         try {
             $databaseId = $this->normalizeNotionId(config('services.notion.database_tasks'));
@@ -164,7 +162,11 @@ class NotionService
                 throw new Exception('Notion credentials not configured');
             }
 
-            // Make request to Notion API to query database
+            $dbProperties = $this->getDatabaseProperties($databaseId, $token);
+            $titleProperty = $this->resolvePropertyName($dbProperties, 'title', ['Name', 'Task name', 'Title']);
+            $statusProperty = $this->resolvePropertyName($dbProperties, 'status', ['Status']);
+            $dueProperty = $this->resolvePropertyName($dbProperties, 'date', ['Due Date', 'Due date', 'Due']);
+
             $response = Http::withHeaders([
                 'Authorization' => "Bearer {$token}",
                 'Notion-Version' => self::NOTION_VERSION,
@@ -184,13 +186,12 @@ class NotionService
             $responseData = $response->json();
             $results = $responseData['results'] ?? [];
 
-            // Format tasks for display
             $tasks = [];
             foreach ($results as $page) {
                 $properties = $page['properties'] ?? [];
-                $name = $this->extractPropertyText($properties, 'Name');
-                $status = $this->extractPropertyStatus($properties, 'Status');
-                $due = $this->extractPropertyDate($properties, 'Due Date');
+                $name = $titleProperty ? $this->extractPropertyText($properties, $titleProperty) : null;
+                $status = $statusProperty ? $this->extractPropertyStatus($properties, $statusProperty) : null;
+                $due = $dueProperty ? $this->extractPropertyDate($properties, $dueProperty) : null;
 
                 if ($name) {
                     $tasks[] = [
@@ -202,7 +203,6 @@ class NotionService
                 }
             }
 
-            // Create response message
             if (empty($tasks)) {
                 $message = "You have no tasks yet.";
             } else {
@@ -236,6 +236,28 @@ class NotionService
             ];
         }
     }
+
+    /**
+     * Save an idea/note to Notion.
+     *
+     * @param string $content Idea content
+     * @param string|null $category Optional category
+     * @return array Result with message
+     */
+    public function createIdea(string $content, ?string $category = null): array
+    {
+        return $this->saveIdea([
+            'content' => $content,
+            'category' => $category,
+        ]);
+    }
+
+    /**
+     * Create a new task in Notion
+     *
+     * @param array $command Command containing title and optional due date
+     * @return array Result with message
+     */
 
     /**
      * Save an idea/note to Notion
@@ -419,6 +441,60 @@ class NotionService
             'next sunday' => $today->next('Sunday')->toDateString(),
             default => $dateString // Return as-is if not a recognized pattern
         };
+    }
+
+    /**
+     * Get database properties schema from Notion.
+     *
+     * @param string $databaseId
+     * @param string $token
+     * @return array
+     */
+    private function getDatabaseProperties(string $databaseId, string $token): array
+    {
+        $response = Http::withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'Notion-Version' => self::NOTION_VERSION,
+            'Content-Type' => 'application/json',
+        ])->get(self::NOTION_API . '/databases/' . $databaseId);
+
+        if (!$response->successful()) {
+            Log::error('Notion API Error reading database schema', [
+                'status' => $response->status(),
+                'response' => $response->json(),
+                'body' => $response->body(),
+                'database_id' => $databaseId,
+            ]);
+
+            throw new Exception('Failed to read database schema from Notion');
+        }
+
+        return $response->json()['properties'] ?? [];
+    }
+
+    /**
+     * Resolve a property name by type, preferring known candidate names.
+     *
+     * @param array $properties
+     * @param string $requiredType
+     * @param array $candidates
+     * @return string|null
+     */
+    private function resolvePropertyName(array $properties, string $requiredType, array $candidates = []): ?string
+    {
+        foreach ($candidates as $candidate) {
+            if (isset($properties[$candidate]) && (($properties[$candidate]['type'] ?? null) === $requiredType)) {
+                return $candidate;
+            }
+        }
+
+        foreach ($properties as $name => $definition) {
+            if (($definition['type'] ?? null) === $requiredType) {
+                return $name;
+            }
+        }
+
+        return null;
     }
 
     /**

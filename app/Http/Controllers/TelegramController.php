@@ -27,66 +27,115 @@ class TelegramController extends Controller
     public function handleWebhook(Request $request, AIService $aiService, NotionService $notionService): Response
     {
         try {
-            $payload = $request->all();
+            $data = json_decode($request->getContent(), true) ?? [];
+            Log::info('Telegram payload', $data);
 
-            // Extract message text and chat ID from the Telegram update payload
-            $messageText = $payload['message']['text'] ?? null;
-            $chatId      = $payload['message']['chat']['id'] ?? null;
+            $message_text = trim((string) ($data['message']['text'] ?? ''));
+            $chat_id = $data['message']['chat']['id'] ?? $data['chat_join_request']['chat']['id'] ?? null;
 
-            // Log the incoming Telegram message
-            Log::info('Telegram message received', [
-                'chat_id'   => $chatId,
-                'message'   => $messageText,
-                'timestamp' => now()->toIso8601String(),
+            Log::info('Telegram chat id', [
+                'chat_id' => $chat_id
             ]);
 
-            // Validate that we have the required fields
-            if (!$messageText || !$chatId) {
-                Log::warning('Telegram webhook missing required fields', [
-                    'has_text'    => !empty($messageText),
-                    'has_chat_id' => !empty($chatId),
-                    'payload'     => $payload,
-                ]);
-
-                // Always return 200 so Telegram stops retrying
-                return response('OK', 200);
+            if (!$chat_id) {
+                return response('ok', 200);
             }
 
-            // Parse the natural-language message with the AI service
-            $command = $aiService->parseMessage($messageText);
+            $replyText = 'Send me a message like "Add task finish MLH challenge tomorrow" or "Show my tasks".';
+            $ruleMatched = false;
 
-            Log::info('Telegram AI parsed command', [
-                'chat_id' => $chatId,
-                'action'  => $command['action'] ?? null,
-                'command' => $command,
-            ]);
+            if ($message_text !== '') {
+                $message = strtolower($message_text);
 
-            // Handle unknown or unparseable commands gracefully
-            if (!$command || !isset($command['action']) || $command['action'] === 'unknown') {
-                $this->sendTelegramMessage(
-                    $chatId,
-                    "Sorry, I didn't understand that. Try something like:\n" .
-                    "• \"Add task Buy groceries tomorrow\"\n" .
-                    "• \"Show my tasks\"\n" .
-                    "• \"Save idea Build a habit tracker app\""
-                );
+                if (str_starts_with($message, 'add task')) {
+                    $ruleMatched = true;
+                    $title = trim(substr($message_text, strlen('add task')));
+                    $result = $notionService->createTask($title);
 
-                return response('OK', 200);
+                    Log::info('Telegram Notion result', [
+                        'chat_id' => $chat_id,
+                        'result' => $result,
+                    ]);
+
+                    $replyText = ($result['success'] ?? false)
+                        ? '✅ Task added: ' . $title
+                        : ($result['message'] ?? '❌ Failed to create task.');
+                } elseif ($message === 'show my tasks') {
+                    $ruleMatched = true;
+                    $result = $notionService->listTasks();
+
+                    Log::info('Telegram Notion result', [
+                        'chat_id' => $chat_id,
+                        'result' => $result,
+                    ]);
+
+                    if (($result['success'] ?? false) && !empty($result['data']['tasks'])) {
+                        $lines = [];
+                        foreach ($result['data']['tasks'] as $index => $task) {
+                            $lines[] = ($index + 1) . '. ' . $task['title'];
+                        }
+
+                        $replyText = "📋 Your tasks:\n" . implode("\n", $lines);
+                    } else {
+                        $replyText = $result['message'] ?? 'Error fetching tasks.';
+                    }
+                } elseif (str_starts_with($message, 'save idea')) {
+                    $ruleMatched = true;
+                    $title = trim(substr($message_text, strlen('save idea')));
+                    $result = $notionService->createIdea($title);
+
+                    Log::info('Telegram Notion result', [
+                        'chat_id' => $chat_id,
+                        'result' => $result,
+                    ]);
+
+                    $replyText = ($result['success'] ?? false)
+                        ? '💡 Idea saved: ' . $title
+                        : ($result['message'] ?? '❌ Failed to save idea.');
+                }
+
+                if (!$ruleMatched) {
+                    $command = $aiService->parseMessage($message_text);
+
+                    Log::info('Telegram AI parsed command', [
+                        'chat_id' => $chat_id,
+                        'command' => $command,
+                    ]);
+
+                    if (!$command || !isset($command['action']) || $command['action'] === 'unknown') {
+                        $replyText = "I didn't understand that. Try:\n- Add task buy groceries tomorrow\n- Show my tasks\n- Save idea build a habit tracker app";
+                    } else {
+                        $result = $notionService->executeCommand($command);
+
+                        Log::info('Telegram Notion result', [
+                            'chat_id' => $chat_id,
+                            'result' => $result,
+                        ]);
+
+                        $replyText = $result['message'] ?? ('Message received: ' . $message_text);
+                    }
+                }
             }
 
-            // Execute the command against Notion
-            $result = $notionService->executeCommand($command);
+            $botToken = config('services.telegram.bot_token') ?: env('TELEGRAM_BOT_TOKEN');
 
-            Log::info('Telegram Notion command executed', [
-                'chat_id' => $chatId,
-                'action'  => $command['action'],
-                'success' => $result['success'] ?? true,
-                'message' => $result['message'] ?? null,
+            if (!$botToken) {
+                Log::error('Telegram bot token not configured');
+                return response('ok', 200);
+            }
+
+            $response = Http::timeout(15)->post(
+                self::TELEGRAM_API . $botToken . '/sendMessage',
+                [
+                    'chat_id' => $chat_id,
+                    'text' => $replyText,
+                ]
+            );
+
+            Log::info('Telegram response', [
+                'status' => $response->status(),
+                'body' => $response->body()
             ]);
-
-            // Send the result back to the Telegram user
-            $replyText = $result['message'] ?? 'Done! Your request has been processed.';
-            $this->sendTelegramMessage($chatId, $replyText);
 
         } catch (\Exception $e) {
             Log::error('Telegram Webhook Error', [
@@ -94,16 +143,10 @@ class TelegramController extends Controller
                 'trace'     => $e->getTraceAsString(),
                 'timestamp' => now()->toIso8601String(),
             ]);
-
-            // Attempt a best-effort error reply if we have a chat ID
-            $chatId = $request->input('message.chat.id');
-            if ($chatId) {
-                $this->sendTelegramMessage($chatId, 'An error occurred while processing your request. Please try again.');
-            }
         }
 
         // Always return HTTP 200 so Telegram does not retry the update
-        return response('OK', 200);
+        return response('ok', 200);
     }
 
     /**

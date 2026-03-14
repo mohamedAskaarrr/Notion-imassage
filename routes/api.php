@@ -24,5 +24,4 @@ Route::post('/whatsapp/webhook', [WhatsAppController::class, 'handleWebhook'])
 // Telegram webhook endpoint
 // This receives incoming Telegram bot messages
 Route::post('/telegram/webhook', [TelegramController::class, 'handleWebhook'])
-    ->withoutMiddleware(['api'])
     ->name('telegram.webhook');
