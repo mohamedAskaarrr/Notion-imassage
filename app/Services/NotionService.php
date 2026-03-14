@@ -72,7 +72,7 @@ class NotionService
         }
 
         try {
-            $databaseId = config('services.notion.database_tasks');
+            $databaseId = $this->normalizeNotionId(config('services.notion.database_tasks'));
             $token = config('services.notion.token');
 
             if (!$databaseId || !$token) {
@@ -157,7 +157,7 @@ class NotionService
     private function listTasks(array $command): array
     {
         try {
-            $databaseId = config('services.notion.database_tasks');
+            $databaseId = $this->normalizeNotionId(config('services.notion.database_tasks'));
             $token = config('services.notion.token');
 
             if (!$databaseId || !$token) {
@@ -256,7 +256,7 @@ class NotionService
         }
 
         try {
-            $databaseId = config('services.notion.database_ideas');
+            $databaseId = $this->normalizeNotionId(config('services.notion.database_ideas'));
             $token = config('services.notion.token');
 
             if (!$databaseId || !$token) {
@@ -419,5 +419,31 @@ class NotionService
             'next sunday' => $today->next('Sunday')->toDateString(),
             default => $dateString // Return as-is if not a recognized pattern
         };
+    }
+
+    /**
+     * Normalize a Notion ID to UUID format.
+     * Accepts both 32-char IDs and dashed UUIDs.
+     *
+     * @param string|null $id
+     * @return string|null
+     */
+    private function normalizeNotionId(?string $id): ?string
+    {
+        if (!$id) {
+            return $id;
+        }
+
+        $clean = str_replace('-', '', trim($id));
+
+        if (strlen($clean) !== 32) {
+            return trim($id);
+        }
+
+        return substr($clean, 0, 8) . '-'
+            . substr($clean, 8, 4) . '-'
+            . substr($clean, 12, 4) . '-'
+            . substr($clean, 16, 4) . '-'
+            . substr($clean, 20, 12);
     }
 }

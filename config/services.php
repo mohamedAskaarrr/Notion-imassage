@@ -39,6 +39,10 @@ return [
         'key' => env('OPENAI_API_KEY'),
     ],
 
+    'gemini' => [
+        'key' => env('GEMINI_API_KEY'),
+    ],
+
     'notion' => [
         'token' => env('NOTION_TOKEN'),
         'database_tasks' => env('NOTION_DATABASE_TASKS'),

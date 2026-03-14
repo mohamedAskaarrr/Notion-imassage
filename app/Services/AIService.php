@@ -9,9 +9,9 @@ use Exception;
 class AIService
 {
     /**
-     * OpenAI API endpoint
+     * Google Gemini API endpoint
      */
-    private const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
+    private const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
     /**
      * Parse a natural language message and convert it to a structured command
@@ -22,54 +22,80 @@ class AIService
     public function parseMessage(string $message): ?array
     {
         try {
-            $apiKey = config('services.openai.key');
+            $apiKey = config('services.gemini.key') ?? env('GEMINI_API_KEY');
 
             if (!$apiKey) {
-                throw new Exception('OpenAI API key not configured');
+                throw new Exception('Gemini API key not configured');
             }
 
             // Create a system prompt that instructs the AI to parse WhatsApp commands
             $systemPrompt = $this->buildSystemPrompt();
 
-            // Make request to OpenAI
+            // Build the full prompt
+            $fullPrompt = $systemPrompt . "\n\nUser message: " . $message;
+
+            // Make request to Google Gemini with API key in URL
+            $url = self::GEMINI_ENDPOINT . '?key=' . $apiKey;
+            
+            Log::info('Calling Gemini API', [
+                'url' => self::GEMINI_ENDPOINT,
+                'api_key_set' => !empty($apiKey)
+            ]);
+
             $response = Http::withHeaders([
-                'Authorization' => "Bearer {$apiKey}",
                 'Content-Type' => 'application/json',
-            ])->post(self::OPENAI_ENDPOINT, [
-                'model' => 'gpt-3.5-turbo',
-                'messages' => [
+            ])->post($url, [
+                'contents' => [
                     [
-                        'role' => 'system',
-                        'content' => $systemPrompt
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $message
+                        'parts' => [
+                            [
+                                'text' => $fullPrompt
+                            ]
+                        ]
                     ]
-                ],
-                'temperature' => 0.3,
-                'max_tokens' => 500
+                ]
+            ]);
+
+            Log::info('Gemini API Response', [
+                'status' => $response->status(),
+                'successful' => $response->successful()
             ]);
 
             if (!$response->successful()) {
-                Log::error('OpenAI API Error', [
+                Log::error('Gemini API Error', [
                     'status' => $response->status(),
                     'response' => $response->json()
                 ]);
-                throw new Exception('Failed to get response from OpenAI');
+                throw new Exception('Failed to get response from Gemini');
             }
 
             $responseData = $response->json();
 
-            // Extract the AI's response
-            $content = $responseData['choices'][0]['message']['content'] ?? null;
+            Log::info('Gemini Response Data', [
+                'data' => $responseData
+            ]);
+
+            // Extract the AI's response from Gemini
+            $content = $responseData['candidates'][0]['content']['parts'][0]['text'] ?? null;
 
             if (!$content) {
-                throw new Exception('No content in OpenAI response');
+                throw new Exception('No content in Gemini response');
             }
 
-            // Parse the JSON response from the AI
-            $command = json_decode($content, true);
+            Log::info('Gemini Content', [
+                'content' => $content
+            ]);
+
+            // Parse the JSON response from the AI (Gemini may wrap JSON in markdown fences)
+            $cleanContent = trim($content);
+            $cleanContent = preg_replace('/^```(?:json)?\s*/i', '', $cleanContent);
+            $cleanContent = preg_replace('/\s*```$/', '', $cleanContent);
+
+            $command = json_decode($cleanContent, true);
+
+            if (!$command && preg_match('/\{.*\}/s', $cleanContent, $matches)) {
+                $command = json_decode($matches[0], true);
+            }
 
             if (!$command) {
                 Log::warning('Failed to parse AI response as JSON', [
