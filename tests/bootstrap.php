@@ -13,7 +13,7 @@ $app->singleton('config', function () {
         'app' => [
             'name' => 'NotionWhatsAppAssistant',
             'env' => 'testing',
-            'key' => 'base64:2fl+Ktvkfl+Ktvkfl+Ktvkfl+Ktvkfl+Ktvkfl+KtvQ=',
+            'key' => 'base64:MMo75gYMsGnq0jOy0RMXfVHQSgmLV9g9hL1qkTVe9Zs=',
             'debug' => true,
             'url' => 'http://localhost',
             'timezone' => 'UTC',

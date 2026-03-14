@@ -94,8 +94,11 @@ class NotionService
         }
 
         $pageProperties = [];
+        // 'page_id' is used to identify the page, and 'filter' is used for queries;
+        // neither should be stored as a Notion property value.
+        $reservedKeys = ['page_id', 'filter'];
         foreach ($properties as $key => $value) {
-            if ($key === 'page_id' || $key === 'filter') {
+            if (in_array($key, $reservedKeys, true)) {
                 continue;
             }
             if (is_string($value)) {

@@ -24,7 +24,6 @@ class WebhookController extends Controller
         }
 
         $messageBody = $request->input('Body', '');
-        $from = $request->input('From', '');
 
         try {
             $parsedIntent = $this->openAIService->parseIntent($messageBody);
@@ -71,7 +70,7 @@ class WebhookController extends Controller
 
     private function buildTwimlResponse(string $message): string
     {
-        $escapedMessage = htmlspecialchars($message, ENT_XML1, 'UTF-8');
+        $escapedMessage = htmlspecialchars($message, ENT_XML1 | ENT_QUOTES, 'UTF-8');
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n    <Message>{$escapedMessage}</Message>\n</Response>";
     }
 }
