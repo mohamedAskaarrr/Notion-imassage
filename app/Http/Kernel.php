@@ -22,7 +22,8 @@ class Kernel extends HttpKernel
     ];
 
     protected $routeMiddleware = [
-        'auth' => \Illuminate\Auth\Middleware\Authenticate::class,
-        'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
+        'auth'            => \Illuminate\Auth\Middleware\Authenticate::class,
+        'throttle'        => \Illuminate\Routing\Middleware\ThrottleRequests::class,
+        'verify.telegram' => \App\Http\Middleware\VerifyTelegramSecret::class,
     ];
 }

@@ -1,6 +1,6 @@
 {
-    "name": "notion-whatsapp/ai-assistant",
-    "description": "WhatsApp AI Assistant integrated with Notion via OpenAI",
+    "name": "notion-telegram/ai-assistant",
+    "description": "Telegram AI Assistant integrated with Notion (Tasks & Ideas) via Google Gemini",
     "type": "project",
     "require": {
         "php": "^8.1",

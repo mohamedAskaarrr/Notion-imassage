@@ -2,19 +2,19 @@
 
 namespace App\Http\Middleware;
 
-use App\Services\TwilioSignatureValidator;
+use App\Services\TelegramSecretValidator;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
-class VerifyTwilioSignature
+class VerifyTelegramSecret
 {
-    public function __construct(private readonly TwilioSignatureValidator $validator) {}
+    public function __construct(private readonly TelegramSecretValidator $validator) {}
 
     public function handle(Request $request, Closure $next): Response
     {
         if (!$this->validator->validate($request)) {
-            return response('Forbidden: Invalid Twilio signature.', 403);
+            return response('Forbidden: Invalid Telegram secret token.', 403);
         }
 
         return $next($request);

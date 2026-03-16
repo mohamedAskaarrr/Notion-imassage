@@ -3,11 +3,11 @@
 namespace Tests\Unit;
 
 use App\Http\Controllers\WebhookController;
+use App\Services\GeminiService;
 use App\Services\NotionService;
-use App\Services\OpenAIService;
-use App\Services\TwilioSignatureValidator;
+use App\Services\TelegramBotService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\Response;
 use Mockery;
 use PHPUnit\Framework\TestCase;
 
@@ -19,133 +19,130 @@ class WebhookControllerTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_handle_returns_403_when_signature_invalid(): void
+    private function makeRequest(string $text = '', int $chatId = 123456789): Request
     {
-        $validator = Mockery::mock(TwilioSignatureValidator::class);
-        $validator->shouldReceive('validate')->once()->andReturn(false);
+        $body = ['message' => ['text' => $text, 'chat' => ['id' => $chatId]]];
 
-        $openAI = Mockery::mock(OpenAIService::class);
-        $notion = Mockery::mock(NotionService::class);
+        $request = Request::create('/api/webhook/telegram', 'POST', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+        ], json_encode($body));
+        $request->setJson(new \Symfony\Component\HttpFoundation\ParameterBag($body));
 
-        $controller = new WebhookController($validator, $openAI, $notion);
-
-        $request = Request::create('/api/webhook/whatsapp', 'POST', [
-            'Body' => 'Hello',
-            'From' => 'whatsapp:+1234567890',
-        ]);
-
-        $response = $controller->handle($request);
-
-        $this->assertEquals(403, $response->getStatusCode());
+        return $request;
     }
 
-    public function test_handle_returns_twiml_on_valid_request(): void
+    public function test_handle_returns_ok_json_on_valid_request(): void
     {
-        $validator = Mockery::mock(TwilioSignatureValidator::class);
-        $validator->shouldReceive('validate')->once()->andReturn(true);
-
-        $openAI = Mockery::mock(OpenAIService::class);
-        $openAI->shouldReceive('parseIntent')
+        $gemini = Mockery::mock(GeminiService::class);
+        $gemini->shouldReceive('parseIntent')
             ->once()
-            ->with('Create a note about meeting')
+            ->with('Add task: deploy hotfix')
             ->andReturn([
-                'action' => 'create_page',
-                'title' => 'Meeting Note',
-                'content' => 'Notes from meeting',
+                'action'     => 'add_to_database',
+                'database'   => 'tasks',
+                'title'      => 'Deploy hotfix',
+                'content'    => '',
                 'properties' => [],
             ]);
 
         $notion = Mockery::mock(NotionService::class);
-        $notion->shouldReceive('createPage')
+        $notion->shouldReceive('addToDatabase')
             ->once()
+            ->with(Mockery::any(), 'tasks')
             ->andReturn(['object' => 'page', 'id' => 'page-123']);
 
-        $controller = new WebhookController($validator, $openAI, $notion);
+        $telegramBot = Mockery::mock(TelegramBotService::class);
+        $telegramBot->shouldReceive('sendMessage')
+            ->once()
+            ->withArgs(function ($chatId, $text) {
+                return $chatId === 123456789
+                    && str_contains($text, 'Deploy hotfix')
+                    && str_contains($text, 'Tasks');
+            });
 
-        $request = Request::create('/api/webhook/whatsapp', 'POST', [
-            'Body' => 'Create a note about meeting',
-            'From' => 'whatsapp:+1234567890',
-        ]);
+        $controller = new WebhookController($gemini, $notion, $telegramBot);
+        $response   = $controller->handle($this->makeRequest('Add task: deploy hotfix'));
 
-        $response = $controller->handle($request);
-
+        $this->assertInstanceOf(JsonResponse::class, $response);
         $this->assertEquals(200, $response->getStatusCode());
-        $this->assertStringContainsString('application/xml', $response->headers->get('Content-Type'));
-        $this->assertStringContainsString('<Response>', $response->getContent());
-        $this->assertStringContainsString('<Message>', $response->getContent());
-        $this->assertStringContainsString('Meeting Note', $response->getContent());
+        $this->assertTrue(json_decode($response->getContent(), true)['ok']);
     }
 
-    public function test_handle_returns_twiml_on_query_action(): void
+    public function test_handle_routes_add_to_ideas_database(): void
     {
-        $validator = Mockery::mock(TwilioSignatureValidator::class);
-        $validator->shouldReceive('validate')->once()->andReturn(true);
-
-        $openAI = Mockery::mock(OpenAIService::class);
-        $openAI->shouldReceive('parseIntent')
+        $gemini = Mockery::mock(GeminiService::class);
+        $gemini->shouldReceive('parseIntent')
             ->once()
             ->andReturn([
-                'action' => 'query_database',
-                'title' => '',
-                'content' => '',
+                'action'     => 'add_to_database',
+                'database'   => 'ideas',
+                'title'      => 'Build a habit tracker',
+                'content'    => '',
+                'properties' => [],
+            ]);
+
+        $notion = Mockery::mock(NotionService::class);
+        $notion->shouldReceive('addToDatabase')
+            ->once()
+            ->with(Mockery::any(), 'ideas')
+            ->andReturn(['object' => 'page', 'id' => 'page-456']);
+
+        $telegramBot = Mockery::mock(TelegramBotService::class);
+        $telegramBot->shouldReceive('sendMessage')
+            ->once()
+            ->withArgs(function ($chatId, $text) {
+                return str_contains($text, 'Ideas');
+            });
+
+        $controller = new WebhookController($gemini, $notion, $telegramBot);
+        $response   = $controller->handle($this->makeRequest('Save idea: build a habit tracker'));
+
+        $this->assertEquals(200, $response->getStatusCode());
+    }
+
+    public function test_handle_returns_ok_json_on_query_action(): void
+    {
+        $gemini = Mockery::mock(GeminiService::class);
+        $gemini->shouldReceive('parseIntent')
+            ->once()
+            ->andReturn([
+                'action'     => 'query_database',
+                'database'   => 'tasks',
+                'title'      => '',
+                'content'    => '',
                 'properties' => ['filter' => []],
             ]);
 
         $notion = Mockery::mock(NotionService::class);
         $notion->shouldReceive('queryDatabase')
             ->once()
+            ->with([], 'tasks')
             ->andReturn(['results' => [['id' => '1'], ['id' => '2']]]);
 
-        $controller = new WebhookController($validator, $openAI, $notion);
-
-        $request = Request::create('/api/webhook/whatsapp', 'POST', [
-            'Body' => 'Find all tasks',
-            'From' => 'whatsapp:+1234567890',
-        ]);
-
-        $response = $controller->handle($request);
-
-        $this->assertEquals(200, $response->getStatusCode());
-        $this->assertStringContainsString('2 results', $response->getContent());
-    }
-
-    public function test_handle_returns_error_message_on_exception(): void
-    {
-        $validator = Mockery::mock(TwilioSignatureValidator::class);
-        $validator->shouldReceive('validate')->once()->andReturn(true);
-
-        $openAI = Mockery::mock(OpenAIService::class);
-        $openAI->shouldReceive('parseIntent')
+        $telegramBot = Mockery::mock(TelegramBotService::class);
+        $telegramBot->shouldReceive('sendMessage')
             ->once()
-            ->andThrow(new \RuntimeException('OpenAI API error'));
+            ->withArgs(function ($chatId, $text) {
+                return str_contains($text, '2 results');
+            });
 
-        $notion = Mockery::mock(NotionService::class);
-
-        $controller = new WebhookController($validator, $openAI, $notion);
-
-        $request = Request::create('/api/webhook/whatsapp', 'POST', [
-            'Body' => 'Some message',
-            'From' => 'whatsapp:+1234567890',
-        ]);
-
-        $response = $controller->handle($request);
+        $controller = new WebhookController($gemini, $notion, $telegramBot);
+        $response   = $controller->handle($this->makeRequest('Show all my tasks'));
 
         $this->assertEquals(200, $response->getStatusCode());
-        $this->assertStringContainsString('error', $response->getContent());
+        $this->assertTrue(json_decode($response->getContent(), true)['ok']);
     }
 
-    public function test_handle_processes_update_page_action(): void
+    public function test_handle_returns_ok_json_on_update_action(): void
     {
-        $validator = Mockery::mock(TwilioSignatureValidator::class);
-        $validator->shouldReceive('validate')->once()->andReturn(true);
-
-        $openAI = Mockery::mock(OpenAIService::class);
-        $openAI->shouldReceive('parseIntent')
+        $gemini = Mockery::mock(GeminiService::class);
+        $gemini->shouldReceive('parseIntent')
             ->once()
             ->andReturn([
-                'action' => 'update_page',
-                'title' => '',
-                'content' => '',
+                'action'     => 'update_page',
+                'database'   => 'tasks',
+                'title'      => '',
+                'content'    => '',
                 'properties' => ['page_id' => 'page-abc', 'status' => 'Done'],
             ]);
 
@@ -155,16 +152,55 @@ class WebhookControllerTest extends TestCase
             ->with('page-abc', ['page_id' => 'page-abc', 'status' => 'Done'])
             ->andReturn(['object' => 'page', 'id' => 'page-abc']);
 
-        $controller = new WebhookController($validator, $openAI, $notion);
+        $telegramBot = Mockery::mock(TelegramBotService::class);
+        $telegramBot->shouldReceive('sendMessage')
+            ->once()
+            ->withArgs(function ($chatId, $text) {
+                return str_contains($text, 'updated successfully');
+            });
 
-        $request = Request::create('/api/webhook/whatsapp', 'POST', [
-            'Body' => 'Update page page-abc set status to Done',
-            'From' => 'whatsapp:+1234567890',
-        ]);
-
-        $response = $controller->handle($request);
+        $controller = new WebhookController($gemini, $notion, $telegramBot);
+        $response   = $controller->handle($this->makeRequest('Update page page-abc set status to Done'));
 
         $this->assertEquals(200, $response->getStatusCode());
-        $this->assertStringContainsString('updated successfully', $response->getContent());
+    }
+
+    public function test_handle_returns_ok_with_error_message_on_exception(): void
+    {
+        $gemini = Mockery::mock(GeminiService::class);
+        $gemini->shouldReceive('parseIntent')
+            ->once()
+            ->andThrow(new \RuntimeException('Gemini API error'));
+
+        $notion = Mockery::mock(NotionService::class);
+
+        $telegramBot = Mockery::mock(TelegramBotService::class);
+        $telegramBot->shouldReceive('sendMessage')
+            ->once()
+            ->withArgs(function ($chatId, $text) {
+                return str_contains($text, 'error');
+            });
+
+        $controller = new WebhookController($gemini, $notion, $telegramBot);
+        $response   = $controller->handle($this->makeRequest('Some message'));
+
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertTrue(json_decode($response->getContent(), true)['ok']);
+    }
+
+    public function test_handle_returns_ok_when_message_text_is_empty(): void
+    {
+        $gemini      = Mockery::mock(GeminiService::class);
+        $notion      = Mockery::mock(NotionService::class);
+        $telegramBot = Mockery::mock(TelegramBotService::class);
+
+        $gemini->shouldNotReceive('parseIntent');
+        $telegramBot->shouldNotReceive('sendMessage');
+
+        $controller = new WebhookController($gemini, $notion, $telegramBot);
+        $response   = $controller->handle($this->makeRequest(''));
+
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertTrue(json_decode($response->getContent(), true)['ok']);
     }
 }
